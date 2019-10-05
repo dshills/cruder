@@ -2,21 +2,21 @@
 
 ## Usage
 
--dbread string
+### -dbread string
 		DB read package (default "*sqlx.DB")
--dbwrite string
+### -dbwrite string
 		DB write package (default "*sqlx.DB")
--host string
+### -host string
 		Connect to host (default "127.0.0.1")
--name string
+### -name string
 		Database name
--null string
+### -null string
 		Null package (default "sql")
--pass string
+### -pass string
 		Password to use when connecting to server
--port int
+### -port int
 		Port number to use for connection (default 3306)
--table string
+### -table string
 		Table name to create CRUD
--user string
+### -user string
 		User for login (default "root")
