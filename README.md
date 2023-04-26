@@ -16,6 +16,8 @@
 		Password to use when connecting to server
 ### -port int
 		Port number to use for connection (default 3306)
+### -public
+        Should the functions be publicly accessable
 ### -table string
 		Table name to create CRUD
 ### -user string
