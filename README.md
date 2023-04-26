@@ -17,7 +17,7 @@
 ### -port int
 		Port number to use for connection (default 3306)
 ### -public
-        Should the functions be publicly accessable
+        Should the functions be publicly accessable (default false)
 ### -table string
 		Table name to create CRUD
 ### -user string
