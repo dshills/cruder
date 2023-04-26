@@ -14,7 +14,7 @@ type DBTable struct {
 	goName    string
 	Fields    []DBField
 	priKeyCnt int
-	fNames    []string
+	IsPublic  bool
 }
 
 // DBField represents a field in a table
@@ -29,7 +29,7 @@ type DBField struct {
 }
 
 // Load will load a tables schema
-func (t *DBTable) Load(db *sqlx.DB, dbName string) error {
+func (t *DBTable) Load(db *sqlx.DB, dbName string, ispublic bool) error {
 	str := `
 	SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, COLUMN_DEFAULT, IS_NULLABLE, COLUMN_KEY, EXTRA
 	FROM INFORMATION_SCHEMA.COLUMNS
@@ -37,7 +37,8 @@ func (t *DBTable) Load(db *sqlx.DB, dbName string) error {
 		AND TABLE_SCHEMA = ?
 	ORDER BY ORDINAL_POSITION
 	`
-	t.goName = singular(goName(t.Name))
+	t.IsPublic = ispublic
+	t.goName = singular(goName(t.Name, ispublic))
 	if err := db.Select(&t.Fields, str, t.Name, dbName); err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ func (t DBTable) GoStruct() string {
 			nullable = true
 		}
 		ty, _ := goType(fld.DataType, nullable)
-		structStr += fmt.Sprintf("\t%s %s `db:\"%s\" json:\"%s\"`\n", f, ty, fld.ColumnName, fld.ColumnName)
+		structStr += fmt.Sprintf("\t%s %s `db:\"%s\"`\n", f, ty, fld.ColumnName)
 	}
 	structStr += "}\n"
 	return structStr
@@ -102,21 +103,21 @@ func (t DBTable) GenCRUD() string {
 	}
 	builder := strings.Builder{}
 	if t.priKeyCnt == 1 {
-		builder.WriteString(t.GenCreate())
-		builder.WriteString(t.GenUpdate())
-		builder.WriteString(t.GenDelete())
-		builder.WriteString(t.GenRead())
+		builder.WriteString(t.genCreate())
+		builder.WriteString(t.genUpdate())
+		builder.WriteString(t.genDelete())
+		builder.WriteString(t.genRead())
 		return builder.String()
 	}
 
-	builder.WriteString(t.GenSet())
-	builder.WriteString(t.GenRemove())
-	builder.WriteString(t.GenRead())
+	builder.WriteString(t.genSet())
+	builder.WriteString(t.genRemove())
+	builder.WriteString(t.genRead())
 	return builder.String()
 }
 
 // GenSet generates a create function string
-func (t DBTable) GenSet() string {
+func (t DBTable) genSet() string {
 	flds := []string{}
 	fval := []string{}
 	for _, f := range t.Fields {
@@ -129,21 +130,21 @@ func (t DBTable) GenSet() string {
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Set will create a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Set(sdb %s) error {\n", t.goName, dbWrite))
+	builder.WriteString(fmt.Sprintf("func (st *%s)Set(ldb %s) error {\n", t.goName, dbWrite))
 	builder.WriteString("\tstr := `\n")
 	builder.WriteString(fmt.Sprintf("\tINSERT INTO %s\n", t.Name))
 	builder.WriteString(fmt.Sprintf("\t(%s)\n", strings.Join(flds, ", ")))
 	builder.WriteString("\tVALUES\n")
 	builder.WriteString(fmt.Sprintf("\t(%s)\n", strings.Join(fval, ", ")))
 	builder.WriteString("\t`\n")
-	builder.WriteString("\t_, err := sdb.NamedExec(str, st)\n")
+	builder.WriteString("\t_, err := ldb.NamedExec(str, st)\n")
 	builder.WriteString("\treturn err\n")
 	builder.WriteString("}\n")
 	return builder.String()
 }
 
 // GenCreate generates a create function string
-func (t DBTable) GenCreate() string {
+func (t DBTable) genCreate() string {
 	flds := []string{}
 	fval := []string{}
 	key := ""
@@ -159,14 +160,18 @@ func (t DBTable) GenCreate() string {
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Create will create a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Create(sdb %s) error {\n", t.goName, dbWrite))
-	builder.WriteString("\tstr := `\n")
+	if t.IsPublic {
+		builder.WriteString(fmt.Sprintf("func (st *%s)Create(ldb %s) error {\n", t.goName, dbWrite))
+	} else {
+		builder.WriteString(fmt.Sprintf("func (st *%s)create(ldb %s) error {\n", t.goName, dbWrite))
+	}
+	builder.WriteString("\tsqlstr := `\n")
 	builder.WriteString(fmt.Sprintf("\tINSERT INTO %s\n", t.Name))
 	builder.WriteString(fmt.Sprintf("\t(%s)\n", strings.Join(flds, ", ")))
 	builder.WriteString("\tVALUES\n")
 	builder.WriteString(fmt.Sprintf("\t(%s)\n", strings.Join(fval, ", ")))
 	builder.WriteString("\t`\n")
-	builder.WriteString("\tres, err := sdb.NamedExec(str, st)\n")
+	builder.WriteString("\tres, err := ldb.NamedExec(str, st)\n")
 	builder.WriteString("\tif err != nil {\n")
 	builder.WriteString("\t\treturn err\n")
 	builder.WriteString("\t}\n")
@@ -177,8 +182,9 @@ func (t DBTable) GenCreate() string {
 }
 
 // GenUpdate generates an update function string
-func (t DBTable) GenUpdate() string {
-	flds := []string{}
+func (t DBTable) genUpdate() string {
+	fldsets := []string{}
+	fldvals := []string{}
 	key := ""
 	for _, f := range t.Fields {
 		switch {
@@ -186,26 +192,31 @@ func (t DBTable) GenUpdate() string {
 			key = f.ColumnName
 		case f.ColumnDefault.String == "CURRENT_TIMESTAMP":
 		default:
-			flds = append(flds, fmt.Sprintf("\t\t%s = :%s", f.ColumnName, f.ColumnName))
+			fldsets = append(fldsets, fmt.Sprintf("\t\t%s = ?", f.ColumnName))
+			fldvals = append(fldvals, "st."+goName(f.ColumnName))
 		}
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Update will update a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Update(sdb %s) error {\n", t.goName, dbWrite))
-	builder.WriteString("\tstr := `\n")
+	if t.IsPublic {
+		builder.WriteString(fmt.Sprintf("func (st *%s)Update(ldb %s) error {\n", t.goName, dbWrite))
+	} else {
+		builder.WriteString(fmt.Sprintf("func (st *%s)update(ldb %s) error {\n", t.goName, dbWrite))
+	}
+	builder.WriteString("\tsqlstr := `\n")
 	builder.WriteString(fmt.Sprintf("\tUPDATE %s SET\n", t.Name))
-	builder.WriteString(strings.Join(flds, ",\n"))
+	builder.WriteString(strings.Join(fldsets, ",\n"))
 	builder.WriteString("\n")
 	builder.WriteString(fmt.Sprintf("\tWHERE %s = :%s\n", key, key))
 	builder.WriteString("\t`\n")
-	builder.WriteString("\t_, err := sdb.NamedExec(str, st)\n")
+	builder.WriteString(fmt.Sprintf("\t_, err := ldb.Exec(str, %v)\n", strings.Join(fldvals, ", ")))
 	builder.WriteString("\treturn err\n")
 	builder.WriteString("}\n")
 	return builder.String()
 }
 
 // GenDelete generates a delete function
-func (t DBTable) GenDelete() string {
+func (t DBTable) genDelete() string {
 	flds := []string{}
 	key := ""
 	gokey := ""
@@ -221,16 +232,20 @@ func (t DBTable) GenDelete() string {
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Delete will delete a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Delete(sdb %s) error {\n", t.goName, dbWrite))
-	builder.WriteString(fmt.Sprintf("\tstr := \"DELETE FROM %s WHERE %s = ?\"\n", t.Name, key))
-	builder.WriteString(fmt.Sprintf("\t_, err := sdb.Exec(str, st.%s)\n", gokey))
+	if t.IsPublic {
+		builder.WriteString(fmt.Sprintf("func (st *%s)Delete(ldb %s) error {\n", t.goName, dbWrite))
+	} else {
+		builder.WriteString(fmt.Sprintf("func (st *%s)delete(ldb %s) error {\n", t.goName, dbWrite))
+	}
+	builder.WriteString(fmt.Sprintf("\tsqlstr := \"DELETE FROM %s WHERE %s = ?\"\n", t.Name, key))
+	builder.WriteString(fmt.Sprintf("\t_, err := ldb.Exec(str, st.%s)\n", gokey))
 	builder.WriteString("\treturn err\n")
 	builder.WriteString("}\n")
 	return builder.String()
 }
 
 // GenRemove generates a remove function
-func (t DBTable) GenRemove() string {
+func (t DBTable) genRemove() string {
 	keys := []string{}
 	gokeys := []string{}
 	for _, f := range t.Fields {
@@ -241,32 +256,42 @@ func (t DBTable) GenRemove() string {
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Remove will delete a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Remove(sdb %s) error {\n", t.goName, dbWrite))
-	builder.WriteString("\tstr := `\n")
+	if t.IsPublic {
+		builder.WriteString(fmt.Sprintf("func (st *%s)Remove(ldb %s) error {\n", t.goName, dbWrite))
+	} else {
+		builder.WriteString(fmt.Sprintf("func (st *%s)remove(ldb %s) error {\n", t.goName, dbWrite))
+	}
+	builder.WriteString("\tsqlstr := `\n")
 	builder.WriteString(fmt.Sprintf("\tDELETE FROM %s WHERE\n", t.Name))
 	builder.WriteString(strings.Join(keys, ",\n"))
 	builder.WriteString("\n\t`\n")
-	builder.WriteString(fmt.Sprintf("\t_, err := sdb.Exec(str, %s)\n", strings.Join(gokeys, ", ")))
+	builder.WriteString(fmt.Sprintf("\t_, err := ldb.Exec(str, %s)\n", strings.Join(gokeys, ", ")))
 	builder.WriteString("\treturn err\n")
 	builder.WriteString("}\n")
 	return builder.String()
 }
 
 // GenRead generates a read function
-func (t DBTable) GenRead() string {
+func (t DBTable) genRead() string {
 	keys := []string{}
 	gokeys := []string{}
+	flds := []string{}
 	for _, f := range t.Fields {
 		if f.ColumnKey == "PRI" {
 			keys = append(keys, fmt.Sprintf("%s = ?", f.ColumnName))
 			gokeys = append(gokeys, "st."+goName(f.ColumnName))
 		}
+		flds = append(flds, f.ColumnName)
 	}
 	builder := strings.Builder{}
 	builder.WriteString("// Read will Read a record\n")
-	builder.WriteString(fmt.Sprintf("func (st *%s)Read(sdb %s) error {\n", t.goName, dbRead))
-	builder.WriteString(fmt.Sprintf("\tstr := \"SELECT * FROM %s WHERE %s\"\n", t.Name, strings.Join(keys, " AND ")))
-	builder.WriteString(fmt.Sprintf("\treturn sdb.Get(st, str, %s)\n", strings.Join(gokeys, ", ")))
+	if t.IsPublic {
+		builder.WriteString(fmt.Sprintf("func (st *%s)Read(ldb %s) error {\n", t.goName, dbRead))
+	} else {
+		builder.WriteString(fmt.Sprintf("func (st *%s)read(ldb %s) error {\n", t.goName, dbRead))
+	}
+	builder.WriteString(fmt.Sprintf("\tsqlstr := `\n\tSELECT %v\n\tFROM %s\n\tWHERE %s\n\t`\n", strings.Join(flds, ", "), t.Name, strings.Join(keys, " AND ")))
+	builder.WriteString(fmt.Sprintf("\treturn ldb.Get(st, str, %s)\n", strings.Join(gokeys, ", ")))
 	builder.WriteString("}\n")
 	return builder.String()
 }

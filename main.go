@@ -17,6 +17,7 @@ func main() {
 	dbName := ""
 	tblName := ""
 	nullPkg := "sql"
+	public := false
 	flag.StringVar(&user, "user", "root", "User for login")
 	flag.StringVar(&dbName, "name", "", "Database name")
 	flag.StringVar(&pass, "pass", "", "Password to use when connecting to server")
@@ -26,6 +27,7 @@ func main() {
 	flag.StringVar(&nullPkg, "null", "sql", "Null package")
 	flag.StringVar(&dbRead, "dbread", "*sqlx.DB", "DB read package")
 	flag.StringVar(&dbWrite, "dbwrite", "*sqlx.DB", "DB write package")
+	flag.BoolVar(&public, "public", public, "Should the functions be publicly accessable")
 	flag.Parse()
 
 	if dbName == "" || host == "" || pass == "" || user == "" || port == 0 || tblName == "" || nullPkg == "" {
@@ -43,7 +45,7 @@ func main() {
 	}
 
 	tbl := DBTable{Name: tblName}
-	if err := tbl.Load(sdb, dbName); err != nil {
+	if err := tbl.Load(sdb, dbName, public); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}

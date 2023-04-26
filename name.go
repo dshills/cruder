@@ -42,7 +42,17 @@ func numToWord(str string) string {
 	return ns
 }
 
-func goName(str string) string {
+func goName(str string, ispublic ...bool) string {
+	if len(str) == 0 {
+		return str
+	}
+	pub := true
+	if len(ispublic) > 0 && !ispublic[0] {
+		pub = false
+	}
+	if str == "id" {
+		return "ID"
+	}
 	str = strings.ToLower(str)
 	str = numToWord(str)
 	if str == "dob" {
@@ -55,6 +65,9 @@ func goName(str string) string {
 	str = strings.Replace(str, " api", "API", -1)
 	str = strings.Replace(str, " ip", "IP", -1)
 	str = strings.Title(str)
+	if !pub {
+		str = strings.ToLower(str[:1]) + str[1:]
+	}
 	return strings.Replace(str, " ", "", -1)
 }
 
