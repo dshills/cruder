@@ -9,7 +9,7 @@ install: ## Run install
 	@go install && echo Installed `date` && echo
 
 lint: ## Run lint
-	@golint ./...
+	@golangci-lint run ./...
 
 vet: ## Run go vet
 	@go vet ./...
@@ -37,26 +37,6 @@ clean: ## Remove previous build
 
 upgrade: ## Get latest libs
 	@go get -u
-
-dbupdate:
-	@dbupdate -user="root" -password="abc" -scripts="./migrate"
-
-watch:
-	@echo Watching for changes...
-	@fswatch -or . -e ".*" -i "\\.go$$" | xargs -n1 -I{} make all tags
-
-watchrun:
-	@echo Watching for changes...
-	@fswatch -or . -e ".*" -i "\\.go$$" | xargs -n1 -I{} make stop all tags start
-
-start: # Start the server
-	@$(PROJECT_NAME) &
-
-stop: ## Stop the server
-	@if pgrep $(PROJECT_NAME); then `pkill $(PROJECT_NAME)`; fi
-
-deployTest:
-	@ssh redTest staging/update.sh
 
 tags:
 	@gotags -R *.go . > tags
